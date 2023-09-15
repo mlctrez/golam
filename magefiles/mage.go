@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -45,7 +47,7 @@ func (bc *buildContext) delete() error {
 
 func steps(steps ...func() error) (err error) {
 	for _, step := range steps {
-		//fmt.Println(runtime.FuncForPC(reflect.ValueOf(step).Pointer()).Name())
+		fmt.Println(runtime.FuncForPC(reflect.ValueOf(step).Pointer()).Name())
 		if err = step(); err != nil {
 			return err
 		}
@@ -73,8 +75,15 @@ type buildContext struct {
 func (bc *buildContext) envInit() (err error) {
 	bc.fnName = os.Getenv("GO_LAMBDA_NAME")
 	if bc.fnName == "" {
-		return errors.New("GO_LAMBDA_NAME environment not set")
+		var result []byte
+		command := exec.Command("go", "list", "-m")
+		if result, err = command.CombinedOutput(); err != nil {
+			goCmdFailed(command, result)
+			return err
+		}
+		bc.fnName = filepath.Base(strings.TrimSpace(string(result)))
 	}
+	fmt.Printf("using function name %s, override with env GO_LAMBDA_NAME\n", bc.fnName)
 	bc.fnRole = fmt.Sprintf("%s_role", bc.fnName)
 	return nil
 }
@@ -114,12 +123,16 @@ func (bc *buildContext) goBuild() (err error) {
 	command.Env = append(os.Environ(), "CGO_ENABLED=0")
 	var result []byte
 	if result, err = command.CombinedOutput(); err != nil {
-		fullCommand := fmt.Sprintf("go %s", strings.Join(command.Args, " "))
-		fmt.Println("*** command failed : ", fullCommand)
-		fmt.Println(string(result))
-		fmt.Println("*** end command failed")
+		goCmdFailed(command, result)
 	}
 	return err
+}
+
+func goCmdFailed(cmd *exec.Cmd, result []byte) {
+	fullCommand := fmt.Sprintf("go %s", strings.Join(cmd.Args, " "))
+	fmt.Println("*** command failed : ", fullCommand)
+	fmt.Println(string(result))
+	fmt.Println("*** end command failed")
 }
 
 func (bc *buildContext) buildZipBytes() (err error) {
@@ -165,7 +178,7 @@ func (bc *buildContext) ensureRole() (err error) {
 		return err
 	}
 
-	// TODO: allow additional polices and custom policies
+	// customize additional roles for the lambda here
 	policies := []string{
 		"arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
 	}
